@@ -14,8 +14,11 @@ from hashlib import sha256
 from ecdsa.numbertheory import inverse_mod
 from ecdsa import SigningKey
 
+curve = ecdsa.curves.NIST256p
+key_len = 32
+nsaddr = "127.0.0.1"
+
 def get_record(dns_name, dns_rdatatype):
-    nsaddr = "127.0.0.1"
     # get DNSKEY for zone
     request = dns.message.make_query(dns_name,
                                      dns_rdatatype,
@@ -95,59 +98,41 @@ def extract_signature(rrset, rrsigset, origin):
         digest = int(hash_holder.hexdigest(), 16)
         return (r,s, digest)
 
-dns_name = 'example.com'
-name = dns.name.from_text('example.com.')
-curve = ecdsa.curves.NIST256p
-key_len = 32
+def grab_pubkey(dns_name):
+    name = dns.name.from_text(dns_name + '.')
+    rrset, rrsig = get_record(dns_name, dns.rdatatype.DNSKEY)
+    stream = io.BytesIO()
+    rrset.to_wire(stream)
+    stream.seek(0)
+    hA = stream.getvalue()
+    keys = {name:rrset}
+    pubkey = extract_pubkey(rrsig, keys)
+    return pubkey
 
-rrset, rrsig = get_record(dns_name, dns.rdatatype.DNSKEY)
-stream = io.BytesIO()
-rrset.to_wire(stream)
-stream.seek(0)
-hA = stream.getvalue()
-keys = {name:rrset}
-pubkey = extract_pubkey(rrsig, keys)
-#print(pubkey)
-#hA, rA, sA = extract_signature(rrsig, name)
-##print(hA,rA,sA)
-#hA = int(sha256(hA).hexdigest(), 16)
-#rA = int.from_bytes(rA, "big")
-#sA = int.from_bytes(sA, "big")
+def grab_signature(dns_name, record_type=dns.rdatatype.A):
+    name = dns.name.from_text(dns_name + '.')
+    rrset, rrsig = get_record(dns_name, record_type)
+    stream = io.BytesIO()
+    keys = {name:rrset}
+    rA, sA, hA = extract_signature(rrset, rrsig, name)
+    return (rA, sA, hA)
 
-dns_name = 'api.example.com'
-name = dns.name.from_text('api.example.com.')
-rrset, rrsig = get_record(dns_name, dns.rdatatype.CNAME)
-stream = io.BytesIO()
-keys = {name:rrset}
-rA, sA, hA = extract_signature(rrset, rrsig, name)
+def crack(pubkey, rA, sA, hA, rB, sB, hB):
+    n = pubkey.generator.order()
+    # precalculate static values
+    #z = hA - hB
+    r_inv = inverse_mod(rA, n)
 
-
-dns_name = 'example.com'
-name = dns.name.from_text('example.com.')
-rrset, rrsig = get_record(dns_name, dns.rdatatype.A)
-stream = io.BytesIO()
-keys = {name:rrset}
-rB, sB, hB = extract_signature(rrset, rrsig, name)
-
-# Change the private key and uncomment to test the algo theoretically
-#d = int.from_bytes(base64.b64decode("bSXygX6AvsIjF6ndA9NYZAaN5NZ4zwHVaf1r5NTu68U="), "big")
-#signingkey = SigningKey.from_secret_exponent(d, curve=curve, hashfunc = sha256)
-
-n = pubkey.generator.order()
-# precalculate static values
-#z = hA - hB
-r_inv = inverse_mod(rA, n)
-
-for candidate in (sA - sB,
-                  sA + sB,
-                  -sA - sB,
-                  -sA + sB):
-    k = ((hA - hB) * inverse_mod(candidate, n)) % n
-    d = (((sA * k - hA) % n) * r_inv) % n
-    signingkey = SigningKey.from_secret_exponent(d, curve=curve)
-    if signingkey.get_verifying_key().pubkey.verifies(hA, ecdsa.ecdsa.Signature(rA, sA)):
-        print("works")
-        signingkey = signingkey
-        k = k
-        priv_key = d
-        print(priv_key)
+    for candidate in (sA - sB,
+                      sA + sB,
+                      -sA - sB,
+                      -sA + sB):
+        k = ((hA - hB) * inverse_mod(candidate, n)) % n
+        d = (((sA * k - hA) % n) * r_inv) % n
+        signingkey = SigningKey.from_secret_exponent(d, curve=curve)
+        if signingkey.get_verifying_key().pubkey.verifies(hA, ecdsa.ecdsa.Signature(rA, sA)):
+            print("works")
+            signingkey = signingkey
+            k = k
+            priv_key = d
+            print(priv_key)
