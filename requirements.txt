@@ -1,4 +1,5 @@
 dnspython==1.16.0
 ecdsa==0.15
+fastavro==1.0.0.post1
 pycryptodome==3.9.7
 six==1.14.0
